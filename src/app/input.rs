@@ -147,47 +147,35 @@ impl App {
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 popup.dry_run = !popup.dry_run;
             }
-            KeyCode::Tab | KeyCode::Down => {
-                if !popup.variables.is_empty() {
-                    popup.selected = (popup.selected + 1) % popup.variables.len();
-                    popup.cursor_pos = popup.variables[popup.selected].1.len();
-                }
+            KeyCode::Tab | KeyCode::Down if !popup.variables.is_empty() => {
+                popup.selected = (popup.selected + 1) % popup.variables.len();
+                popup.cursor_pos = popup.variables[popup.selected].1.len();
             }
-            KeyCode::BackTab | KeyCode::Up => {
-                if !popup.variables.is_empty() {
-                    popup.selected = if popup.selected == 0 {
-                        popup.variables.len() - 1
-                    } else {
-                        popup.selected - 1
-                    };
-                    popup.cursor_pos = popup.variables[popup.selected].1.len();
-                }
+            KeyCode::BackTab | KeyCode::Up if !popup.variables.is_empty() => {
+                popup.selected = if popup.selected == 0 {
+                    popup.variables.len() - 1
+                } else {
+                    popup.selected - 1
+                };
+                popup.cursor_pos = popup.variables[popup.selected].1.len();
             }
-            KeyCode::Char(c) => {
-                if !popup.variables.is_empty() {
-                    let value = &mut popup.variables[popup.selected].1;
-                    value.insert(popup.cursor_pos, c);
+            KeyCode::Char(c) if !popup.variables.is_empty() => {
+                let value = &mut popup.variables[popup.selected].1;
+                value.insert(popup.cursor_pos, c);
+                popup.cursor_pos += 1;
+            }
+            KeyCode::Backspace if !popup.variables.is_empty() && popup.cursor_pos > 0 => {
+                let value = &mut popup.variables[popup.selected].1;
+                popup.cursor_pos -= 1;
+                value.remove(popup.cursor_pos);
+            }
+            KeyCode::Left if popup.cursor_pos > 0 => {
+                popup.cursor_pos -= 1;
+            }
+            KeyCode::Right if !popup.variables.is_empty() => {
+                let len = popup.variables[popup.selected].1.len();
+                if popup.cursor_pos < len {
                     popup.cursor_pos += 1;
-                }
-            }
-            KeyCode::Backspace => {
-                if !popup.variables.is_empty() && popup.cursor_pos > 0 {
-                    let value = &mut popup.variables[popup.selected].1;
-                    popup.cursor_pos -= 1;
-                    value.remove(popup.cursor_pos);
-                }
-            }
-            KeyCode::Left => {
-                if popup.cursor_pos > 0 {
-                    popup.cursor_pos -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if !popup.variables.is_empty() {
-                    let len = popup.variables[popup.selected].1.len();
-                    if popup.cursor_pos < len {
-                        popup.cursor_pos += 1;
-                    }
                 }
             }
             _ => {}

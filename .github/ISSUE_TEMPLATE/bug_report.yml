@@ -1,0 +1,54 @@
+name: Bug report
+description: Report something that is broken or behaves unexpectedly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands, keystrokes, or actions that trigger the bug.
+      placeholder: |
+        1. Run `makr path/to/Makefile`
+        2. Press `/` and type `…`
+        3. See …
+    validations:
+      required: true
+
+  - type: textarea
+    id: makefile
+    attributes:
+      label: Minimal Makefile (if relevant)
+      description: The smallest Makefile that reproduces the issue.
+      render: makefile
+
+  - type: input
+    id: version
+    attributes:
+      label: makr version
+      description: Output of `makr --version`.
+      placeholder: "makr 0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / terminal
+      placeholder: "Ubuntu 24.04, kitty 0.35"
+    validations:
+      required: true
+
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version (if built from source)
+      description: Output of `rustc --version`.
+      placeholder: "rustc 1.82.0"
