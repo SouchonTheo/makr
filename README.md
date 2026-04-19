@@ -2,7 +2,7 @@
 
 A fast, interactive TUI for exploring and running Makefile targets.
 
-![makr demo](assets/demo.gif)
+![makr demo](https://raw.githubusercontent.com/SouchonTheo/makr/main/assets/demo.gif)
 
 [![CI](https://github.com/SouchonTheo/makr/actions/workflows/ci.yml/badge.svg)](https://github.com/SouchonTheo/makr/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/makr.svg)](https://crates.io/crates/makr)
@@ -39,7 +39,7 @@ cargo install --path .
 
 ## Usage
 
-```
+``` shell
 makr [OPTIONS] [FILE]
 ```
 

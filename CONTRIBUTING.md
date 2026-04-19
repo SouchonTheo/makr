@@ -12,11 +12,13 @@ Thanks for your interest in contributing! Here's how you can help.
 1. Fork the repo and create a branch from `main`.
 2. Make your changes.
 3. Make sure the checks pass:
+
    ```sh
    cargo fmt --all -- --check
    cargo clippy -- -D warnings
    cargo test
    ```
+
 4. Open a pull request against `main`.
 
 ## Code style
