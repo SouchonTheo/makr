@@ -2,7 +2,11 @@
 
 A fast, interactive TUI for exploring and running Makefile targets.
 
+![makr demo](assets/demo.gif)
+
 [![CI](https://github.com/SouchonTheo/makr/actions/workflows/ci.yml/badge.svg)](https://github.com/SouchonTheo/makr/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/makr.svg)](https://crates.io/crates/makr)
+[![Downloads](https://img.shields.io/crates/d/makr.svg)](https://crates.io/crates/makr)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-2024-orange)
 
@@ -19,15 +23,18 @@ A fast, interactive TUI for exploring and running Makefile targets.
 
 ## Installation
 
+From [crates.io](https://crates.io/crates/makr):
+
 ```sh
-cargo install --path .
+cargo install makr
 ```
 
-Or build from source:
+From source:
 
 ```sh
-cargo build --release
-# Binary is at target/release/makr
+git clone https://github.com/SouchonTheo/makr
+cd makr
+cargo install --path .
 ```
 
 ## Usage
