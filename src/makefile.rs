@@ -383,8 +383,12 @@ fn matches_glob(pattern: &str, name: &str) -> bool {
 }
 
 /// Extract all variable names referenced via `$(VAR)` or `${VAR}` in a string.
+///
+/// Recurses into the body of function-like constructs (e.g. `$(call f,$(VAR))`,
+/// `$(wildcard $(DIR)/*.c)`) so nested references are still picked up.
 fn extract_var_references(text: &str) -> Vec<String> {
     let mut vars = Vec::new();
+    let mut seen = HashSet::new();
     let bytes = text.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
@@ -412,16 +416,24 @@ fn extract_var_references(text: &str) -> Vec<String> {
             }
             if depth == 0 {
                 let name = &text[start..end];
-                // Only simple variable names (no spaces, no nested $, no functions like wildcard/patsubst)
+                // Simple variable name (e.g. `$(CC)`, `$(BUILD_DIR)`).
+                // Reject names that look like function calls or contain expansions —
+                // but still keep scanning past `$(` so nested `$(VAR)` references inside
+                // are picked up.
                 if !name.is_empty()
                     && !name.contains(' ')
+                    && !name.contains('\t')
                     && !name.contains('$')
                     && !name.contains(':')
+                    && !name.contains(',')
+                    && seen.insert(name.to_string())
                 {
                     vars.push(name.to_string());
                 }
             }
-            i = end + 1;
+            // Advance past `$(` only — don't skip the body, so we still see nested
+            // references like `$(SNAPSHOT_DIR)` inside `$(call f,...,$(SNAPSHOT_DIR))`.
+            i += 2;
         } else {
             i += 1;
         }
@@ -749,10 +761,36 @@ mod tests {
     }
 
     #[test]
-    fn extract_var_refs_skips_nested() {
-        // $($(FOO)) contains $ — should be skipped
+    fn extract_var_refs_nested_indirect() {
+        // $($(FOO)) — the outer expansion isn't a simple name, but FOO is read
+        // to compute the inner name, so FOO should still be reported.
         let refs = extract_var_references("$($(FOO))");
-        assert!(refs.is_empty());
+        assert_eq!(refs, vec!["FOO"]);
+    }
+
+    #[test]
+    fn extract_var_refs_inside_call() {
+        // $(call run-dylint,tfhe_lints_snapshot,$(SNAPSHOT_DIR)) — the outer
+        // $(call ...) is a function invocation, but $(SNAPSHOT_DIR) inside is a
+        // real variable reference and must be picked up.
+        let refs = extract_var_references(
+            "$(call run-dylint,tfhe_lints_snapshot,$(SNAPSHOT_DIR)) $(call crate-args,$(CRATE))",
+        );
+        assert!(refs.contains(&"SNAPSHOT_DIR".to_string()), "got {:?}", refs);
+        assert!(refs.contains(&"CRATE".to_string()), "got {:?}", refs);
+    }
+
+    #[test]
+    fn extract_var_refs_inside_wildcard() {
+        // Variable references nested inside a function call should be found.
+        let refs = extract_var_references("$(wildcard $(SRC_DIR)/*.c)");
+        assert_eq!(refs, vec!["SRC_DIR"]);
+    }
+
+    #[test]
+    fn extract_var_refs_no_duplicates() {
+        let refs = extract_var_references("$(CC) $(CC) $(NAME)");
+        assert_eq!(refs, vec!["CC", "NAME"]);
     }
 
     #[test]
