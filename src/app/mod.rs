@@ -65,6 +65,10 @@ pub struct App {
     pub(crate) detail_scroll: u16,
     pub(crate) dry_run: bool,
     pub(crate) last_result: Option<String>,
+    /// Forces a `terminal.clear()` before the next draw. Set when leaving an
+    /// overlay mode (popup) or returning from an external command, to wipe
+    /// any stale cells / cursor state we might inherit from the prior screen.
+    pub(crate) needs_clear: bool,
 }
 
 impl App {
@@ -89,11 +93,16 @@ impl App {
             detail_scroll: 0,
             dry_run,
             last_result: None,
+            needs_clear: false,
         }
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         loop {
+            if self.needs_clear {
+                terminal.clear()?;
+                self.needs_clear = false;
+            }
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
 
@@ -147,6 +156,9 @@ impl App {
         io::stdin().read_line(&mut buf).ok();
 
         *terminal = ratatui::init();
+        // External program may have left the alt-screen / cursor in any
+        // state — force a full redraw on the next loop tick.
+        self.needs_clear = true;
         Ok(())
     }
 

@@ -119,6 +119,9 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
+                // Popup is an overlay — force a clean redraw so no popup
+                // cells or cursor remnants survive the transition.
+                self.needs_clear = true;
                 return;
             }
             KeyCode::Enter => {
@@ -133,6 +136,7 @@ impl App {
                     });
                 }
                 self.mode = Mode::Normal;
+                self.needs_clear = true;
                 return;
             }
             _ => {}
