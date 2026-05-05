@@ -54,6 +54,31 @@ pub(crate) enum Mode {
     Search(SearchState),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum SortMode {
+    Default,
+    AlphaAsc,
+    AlphaDesc,
+}
+
+impl SortMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Default => Self::AlphaAsc,
+            Self::AlphaAsc => Self::AlphaDesc,
+            Self::AlphaDesc => Self::Default,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::AlphaAsc => "a-z",
+            Self::AlphaDesc => "z-a",
+        }
+    }
+}
+
 pub struct App {
     pub(crate) variables: Vec<MakeVariable>,
     pub(crate) targets: Vec<MakeTarget>,
@@ -69,6 +94,10 @@ pub struct App {
     /// overlay mode (popup) or returning from an external command, to wipe
     /// any stale cells / cursor state we might inherit from the prior screen.
     pub(crate) needs_clear: bool,
+    pub(crate) sort_mode: SortMode,
+    /// Maps display positions to indices into `targets`. Drives the normal-mode
+    /// list rendering and selection — search has its own filtered_indices.
+    pub(crate) display_order: Vec<usize>,
 }
 
 impl App {
@@ -82,6 +111,7 @@ impl App {
         if !targets.is_empty() {
             list_state.select(Some(0));
         }
+        let display_order: Vec<usize> = (0..targets.len()).collect();
         Self {
             variables,
             targets,
@@ -94,7 +124,36 @@ impl App {
             dry_run,
             last_result: None,
             needs_clear: false,
+            sort_mode: SortMode::Default,
+            display_order,
         }
+    }
+
+    fn apply_sort(&mut self) {
+        let mut order: Vec<usize> = (0..self.targets.len()).collect();
+        match self.sort_mode {
+            SortMode::Default => {}
+            SortMode::AlphaAsc => {
+                order.sort_by(|&a, &b| self.targets[a].name.cmp(&self.targets[b].name));
+            }
+            SortMode::AlphaDesc => {
+                order.sort_by(|&a, &b| self.targets[b].name.cmp(&self.targets[a].name));
+            }
+        }
+        self.display_order = order;
+    }
+
+    pub(crate) fn cycle_sort(&mut self) {
+        // Preserve which target the user has highlighted across the re-sort.
+        let current_target = self.selected_target_index();
+        self.sort_mode = self.sort_mode.next();
+        self.apply_sort();
+        if let Some(target_idx) = current_target {
+            if let Some(pos) = self.display_order.iter().position(|&i| i == target_idx) {
+                self.list_state.select(Some(pos));
+            }
+        }
+        self.detail_scroll = 0;
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -178,7 +237,7 @@ impl App {
     }
 
     pub(crate) fn open_popup(&mut self) {
-        if let Some(idx) = self.list_state.selected() {
+        if let Some(idx) = self.selected_target_index() {
             self.open_popup_for(idx);
         }
     }
@@ -231,7 +290,10 @@ impl App {
                 .list_state
                 .selected()
                 .and_then(|i| search.filtered_indices.get(i).copied()),
-            _ => self.list_state.selected(),
+            _ => self
+                .list_state
+                .selected()
+                .and_then(|i| self.display_order.get(i).copied()),
         }
     }
 

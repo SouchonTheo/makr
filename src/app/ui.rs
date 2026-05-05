@@ -71,16 +71,39 @@ impl App {
             .into_iter()
             .flatten()
             .collect(),
-            _ => [
-                keybind(" j/k", " navigate  "),
-                keybind("C-d/C-u", " scroll  "),
-                keybind("/", " search  "),
-                keybind("Enter", " run  "),
-                keybind("q", " quit"),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
+            _ => {
+                let mut spans: Vec<Span> = [
+                    keybind(" j/k", " navigate  "),
+                    keybind("C-d/C-u", " scroll  "),
+                    keybind("/", " search  "),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                spans.push(Span::styled(
+                    "s",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    " sort:",
+                    Style::default().fg(Color::DarkGray),
+                ));
+                spans.push(Span::styled(
+                    self.sort_mode.label(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                spans.extend(
+                    [keybind("Enter", " run  "), keybind("q", " quit")]
+                        .into_iter()
+                        .flatten(),
+                );
+                spans
+            }
         };
 
         // Show last execution result in help bar
@@ -125,7 +148,8 @@ impl App {
                     .block(Block::bordered().title(" Search ".fg(Color::Yellow).bold()));
                 frame.render_widget(input, search_input_area);
 
-                let cursor_x = search_input_area.x + 1 + 1 + search.cursor_pos as u16;
+                let cursor_chars = search.query[..search.cursor_pos].chars().count() as u16;
+                let cursor_x = search_input_area.x + 1 + 1 + cursor_chars;
                 let cursor_y = search_input_area.y + 1;
                 frame.set_cursor_position((cursor_x, cursor_y));
 
@@ -175,9 +199,10 @@ impl App {
             }
             _ => {
                 let items: Vec<Line> = self
-                    .targets
+                    .display_order
                     .iter()
-                    .map(|t| {
+                    .map(|&i| {
+                        let t = &self.targets[i];
                         let mut spans =
                             vec![Span::styled(&t.name, Style::default().fg(Color::Green))];
                         if t.is_phony {
@@ -389,17 +414,21 @@ impl App {
                 };
                 let arrow = if is_selected { "> " } else { "  " };
 
-                // Scroll the value horizontally so the cursor is always visible
-                let display_value = if is_selected && value.len() > value_max_width {
-                    let scroll = popup
-                        .cursor_pos
-                        .saturating_sub(value_max_width.saturating_sub(1));
-                    let end = (scroll + value_max_width).min(value.len());
-                    &value[scroll..end]
-                } else if value.len() > value_max_width {
-                    &value[..value_max_width]
+                // Scroll the value horizontally so the cursor is always visible.
+                // Scrolling/truncation operate on chars (not bytes) so multibyte
+                // input never lands mid-codepoint when slicing.
+                let value_chars: Vec<char> = value.chars().collect();
+                let cursor_char_idx = value[..popup.cursor_pos].chars().count();
+                let display_value: String = if is_selected && value_chars.len() > value_max_width
+                {
+                    let scroll =
+                        cursor_char_idx.saturating_sub(value_max_width.saturating_sub(1));
+                    let end = (scroll + value_max_width).min(value_chars.len());
+                    value_chars[scroll..end].iter().collect()
+                } else if value_chars.len() > value_max_width {
+                    value_chars[..value_max_width].iter().collect()
                 } else {
-                    value.as_str()
+                    value.clone()
                 };
 
                 lines.push(Line::from(vec![
@@ -462,14 +491,14 @@ impl App {
 
         if has_vars {
             let value = &popup.variables[popup.selected].1;
-            let scroll = if value.len() > value_max_width {
-                popup
-                    .cursor_pos
-                    .saturating_sub(value_max_width.saturating_sub(1))
+            let value_chars_count = value.chars().count();
+            let cursor_char_idx = value[..popup.cursor_pos].chars().count();
+            let scroll = if value_chars_count > value_max_width {
+                cursor_char_idx.saturating_sub(value_max_width.saturating_sub(1))
             } else {
                 0
             };
-            let visible_cursor = popup.cursor_pos - scroll;
+            let visible_cursor = cursor_char_idx - scroll;
             let cursor_x = area.x + 1 + 2 + name_col as u16 + 3 + visible_cursor as u16;
             let cursor_y = area.y + 1 + 2 + popup.selected as u16;
             frame.set_cursor_position((cursor_x, cursor_y));

@@ -18,6 +18,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.select_next(),
             KeyCode::Enter => self.open_popup(),
             KeyCode::Char('/') => self.open_search(),
+            KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.detail_scroll = self.detail_scroll.saturating_add(5);
             }
@@ -79,7 +80,7 @@ impl App {
                     return;
                 };
                 search.query.insert(search.cursor_pos, c);
-                search.cursor_pos += 1;
+                search.cursor_pos += c.len_utf8();
                 self.update_search_filter();
                 self.detail_scroll = 0;
             }
@@ -87,8 +88,8 @@ impl App {
                 let Some(search) = self.search_state_mut() else {
                     return;
                 };
-                if search.cursor_pos > 0 {
-                    search.cursor_pos -= 1;
+                if let Some(prev) = search.query[..search.cursor_pos].chars().next_back() {
+                    search.cursor_pos -= prev.len_utf8();
                     search.query.remove(search.cursor_pos);
                     self.update_search_filter();
                     self.detail_scroll = 0;
@@ -98,16 +99,16 @@ impl App {
                 let Some(search) = self.search_state_mut() else {
                     return;
                 };
-                if search.cursor_pos > 0 {
-                    search.cursor_pos -= 1;
+                if let Some(prev) = search.query[..search.cursor_pos].chars().next_back() {
+                    search.cursor_pos -= prev.len_utf8();
                 }
             }
             KeyCode::Right => {
                 let Some(search) = self.search_state_mut() else {
                     return;
                 };
-                if search.cursor_pos < search.query.len() {
-                    search.cursor_pos += 1;
+                if let Some(next) = search.query[search.cursor_pos..].chars().next() {
+                    search.cursor_pos += next.len_utf8();
                 }
             }
             _ => {}
@@ -166,20 +167,25 @@ impl App {
             KeyCode::Char(c) if !popup.variables.is_empty() => {
                 let value = &mut popup.variables[popup.selected].1;
                 value.insert(popup.cursor_pos, c);
-                popup.cursor_pos += 1;
+                popup.cursor_pos += c.len_utf8();
             }
             KeyCode::Backspace if !popup.variables.is_empty() && popup.cursor_pos > 0 => {
                 let value = &mut popup.variables[popup.selected].1;
-                popup.cursor_pos -= 1;
-                value.remove(popup.cursor_pos);
+                if let Some(prev) = value[..popup.cursor_pos].chars().next_back() {
+                    popup.cursor_pos -= prev.len_utf8();
+                    value.remove(popup.cursor_pos);
+                }
             }
-            KeyCode::Left if popup.cursor_pos > 0 => {
-                popup.cursor_pos -= 1;
+            KeyCode::Left if !popup.variables.is_empty() && popup.cursor_pos > 0 => {
+                let value = &popup.variables[popup.selected].1;
+                if let Some(prev) = value[..popup.cursor_pos].chars().next_back() {
+                    popup.cursor_pos -= prev.len_utf8();
+                }
             }
             KeyCode::Right if !popup.variables.is_empty() => {
-                let len = popup.variables[popup.selected].1.len();
-                if popup.cursor_pos < len {
-                    popup.cursor_pos += 1;
+                let value = &popup.variables[popup.selected].1;
+                if let Some(next) = value[popup.cursor_pos..].chars().next() {
+                    popup.cursor_pos += next.len_utf8();
                 }
             }
             _ => {}
