@@ -416,11 +416,14 @@ impl App {
 
                 // Scroll the value horizontally so the cursor is always visible.
                 // Scrolling/truncation operate on chars (not bytes) so multibyte
-                // input never lands mid-codepoint when slicing.
+                // input never lands mid-codepoint when slicing. cursor_char_idx
+                // is only meaningful for the selected row — popup.cursor_pos
+                // indexes into the selected variable's value, so reading it
+                // against any other (potentially shorter) value would panic.
                 let value_chars: Vec<char> = value.chars().collect();
-                let cursor_char_idx = value[..popup.cursor_pos].chars().count();
                 let display_value: String = if is_selected && value_chars.len() > value_max_width
                 {
+                    let cursor_char_idx = value[..popup.cursor_pos].chars().count();
                     let scroll =
                         cursor_char_idx.saturating_sub(value_max_width.saturating_sub(1));
                     let end = (scroll + value_max_width).min(value_chars.len());
