@@ -86,10 +86,7 @@ impl App {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ));
-                spans.push(Span::styled(
-                    " sort:",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(" sort:", Style::default().fg(Color::DarkGray)));
                 spans.push(Span::styled(
                     self.sort_mode.label(),
                     Style::default()
@@ -421,11 +418,9 @@ impl App {
                 // indexes into the selected variable's value, so reading it
                 // against any other (potentially shorter) value would panic.
                 let value_chars: Vec<char> = value.chars().collect();
-                let display_value: String = if is_selected && value_chars.len() > value_max_width
-                {
+                let display_value: String = if is_selected && value_chars.len() > value_max_width {
                     let cursor_char_idx = value[..popup.cursor_pos].chars().count();
-                    let scroll =
-                        cursor_char_idx.saturating_sub(value_max_width.saturating_sub(1));
+                    let scroll = cursor_char_idx.saturating_sub(value_max_width.saturating_sub(1));
                     let end = (scroll + value_max_width).min(value_chars.len());
                     value_chars[scroll..end].iter().collect()
                 } else if value_chars.len() > value_max_width {
