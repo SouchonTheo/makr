@@ -441,6 +441,36 @@ fn extract_var_references(text: &str) -> Vec<String> {
     vars
 }
 
+/// GNU Make automatic / built-in variables that the user must never override
+/// on the command line: doing so clobbers values make sets for itself and
+/// breaks things like recursive sub-makes (`$(MAKE) -C ...`).
+const AUTOMATIC_MAKE_VARS: &[&str] = &[
+    "MAKE",
+    "MAKEFLAGS",
+    "MAKEFILES",
+    "MAKEFILE_LIST",
+    "MAKECMDGOALS",
+    "MAKELEVEL",
+    "MAKE_VERSION",
+    "MAKE_HOST",
+    "CURDIR",
+    "SHELL",
+    ".SHELLFLAGS",
+    ".VARIABLES",
+    ".FEATURES",
+    ".INCLUDE_DIRS",
+    ".DEFAULT_GOAL",
+    ".RECIPEPREFIX",
+    "VPATH",
+    "GPATH",
+    ".LIBPATTERNS",
+    ".EXTRA_PREREQS",
+];
+
+fn is_automatic_make_var(name: &str) -> bool {
+    AUTOMATIC_MAKE_VARS.contains(&name)
+}
+
 /// Find all variable names referenced via `$(VAR)` or `${VAR}` in the target's
 /// commands and dependencies. Returns cloned `MakeVariable`s for defined variables
 /// and synthesized entries (with empty value) for undefined ones.
@@ -456,6 +486,9 @@ pub fn find_all_used_variables(
     for text in all_text {
         for name in extract_var_references(text) {
             if seen.insert(name.clone()) {
+                if is_automatic_make_var(&name) {
+                    continue;
+                }
                 if let Some(var) = variables.iter().find(|v| v.name == name) {
                     result.push(MakeVariable {
                         name: var.name.clone(),
@@ -875,6 +908,38 @@ mod tests {
         let all = find_all_used_variables(&target, &vars);
         assert_eq!(all.len(), 1, "NAME should appear only once");
         assert_eq!(all[0].name, "NAME");
+    }
+
+    #[test]
+    fn find_all_skips_automatic_make_vars() {
+        // $(MAKE), $(MAKEFLAGS), $(CURDIR) are automatic — never expose them
+        // as overridable, otherwise running the target would clobber make's
+        // own values and break recursive sub-makes.
+        let vars = vec![];
+        let target = MakeTarget {
+            name: "subdirs".into(),
+            dependencies: vec![],
+            commands: vec![
+                "$(MAKE) -C subdir $(MAKEFLAGS)".into(),
+                "echo $(CURDIR)/$(NAME)".into(),
+            ],
+            is_phony: false,
+        };
+
+        let all = find_all_used_variables(&target, &vars);
+        let names: Vec<&str> = all.iter().map(|v| v.name.as_str()).collect();
+        assert!(!names.contains(&"MAKE"), "MAKE should be filtered: {:?}", names);
+        assert!(
+            !names.contains(&"MAKEFLAGS"),
+            "MAKEFLAGS should be filtered: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"CURDIR"),
+            "CURDIR should be filtered: {:?}",
+            names
+        );
+        assert!(names.contains(&"NAME"), "NAME should remain: {:?}", names);
     }
 
     #[test]
