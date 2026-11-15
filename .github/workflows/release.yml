@@ -1,30 +1,63 @@
 name: Release
 
+# Triggered by pushing a version tag (see `make release VERSION=x.y.z`).
+# verify → GitHub release with notes → binaries + crates.io publish (in parallel).
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
-permissions:
-  contents: write
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Tag matches Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo publish --dry-run --locked
+
   create-release:
     name: Create GitHub release
+    needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          body_path: RELEASE_NOTES.md
 
   upload-assets:
     name: Upload ${{ matrix.target }}
     needs: create-release
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -52,4 +85,22 @@ jobs:
           target: ${{ matrix.target }}
           tar: unix
           zip: windows
+          checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publish to crates.io
+    # After the GitHub release, so a failure there never leaves a crate
+    # published without its release.
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Trusted Publishing: no long-lived token in secrets
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
