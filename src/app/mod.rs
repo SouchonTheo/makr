@@ -12,9 +12,34 @@ use crate::makefile::{MakeTarget, MakeVariable, find_all_used_variables};
 pub(crate) struct PopupState {
     pub target_name: String,
     pub variables: Vec<(String, String)>,
+    /// Values as parsed from the Makefile, parallel to `variables`. Only
+    /// variables whose value differs from this are passed to make, so
+    /// untouched ones keep make's own semantics (env vars, built-ins like
+    /// `CC`, conditionals, `+=`).
+    pub original_values: Vec<String>,
     pub selected: usize,
     pub cursor_pos: usize,
     pub dry_run: bool,
+}
+
+impl PopupState {
+    /// Variables the user changed in the editor, as `(name, value)` pairs.
+    pub fn overrides(&self) -> Vec<(String, String)> {
+        self.variables
+            .iter()
+            .zip(&self.original_values)
+            .filter(|((_, value), original)| value != *original)
+            .map(|(var, _)| var.clone())
+            .collect()
+    }
+
+    pub fn run_request(&self) -> RunRequest {
+        RunRequest {
+            target_name: self.target_name.clone(),
+            overrides: self.overrides(),
+            dry_run: self.dry_run,
+        }
+    }
 }
 
 pub(crate) struct SearchState {
@@ -149,11 +174,17 @@ impl App {
         self.sort_mode = self.sort_mode.next();
         self.apply_sort();
         if let Some(target_idx) = current_target {
-            if let Some(pos) = self.display_order.iter().position(|&i| i == target_idx) {
-                self.list_state.select(Some(pos));
-            }
+            self.select_target(target_idx);
         }
         self.detail_scroll = 0;
+    }
+
+    /// Highlight the given target (an index into `targets`) in the normal-mode
+    /// list, translating it to its position in the current sort order.
+    pub(crate) fn select_target(&mut self, target_idx: usize) {
+        if let Some(pos) = self.display_order.iter().position(|&i| i == target_idx) {
+            self.list_state.select(Some(pos));
+        }
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -226,10 +257,12 @@ impl App {
         let used = find_all_used_variables(target, &self.variables);
         let variables: Vec<(String, String)> =
             used.into_iter().map(|v| (v.name, v.value)).collect();
-        let cursor_pos = variables.first().map(|(_, v)| v.len()).unwrap_or(0);
+        let cursor_pos = variables.first().map_or(0, |(_, v)| v.len());
+        let original_values = variables.iter().map(|(_, v)| v.clone()).collect();
         self.mode = Mode::Popup(PopupState {
             target_name: target.name.clone(),
             variables,
+            original_values,
             selected: 0,
             cursor_pos,
             dry_run: self.dry_run,
@@ -336,5 +369,131 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::makefile::AssignmentKind;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn target(name: &str, commands: &[&str]) -> MakeTarget {
+        MakeTarget {
+            name: name.to_string(),
+            dependencies: Vec::new(),
+            commands: commands.iter().map(|c| (*c).to_string()).collect(),
+            is_phony: true,
+        }
+    }
+
+    fn var(name: &str, value: &str) -> MakeVariable {
+        MakeVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            assignment: AssignmentKind::Recursive,
+        }
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn type_str(app: &mut App, s: &str) {
+        for c in s.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    fn popup(app: &App) -> &PopupState {
+        match &app.mode {
+            Mode::Popup(p) => p,
+            _ => panic!("expected popup mode"),
+        }
+    }
+
+    #[test]
+    fn unedited_variables_are_not_overridden() {
+        // CC is undefined in the Makefile (make's built-in), OUT is defined.
+        let mut app = App::new(
+            vec![var("OUT", "build")],
+            vec![target("all", &["$(CC) -o $(OUT)/app main.c"])],
+            "Makefile".into(),
+            false,
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(popup(&app).variables.len(), 2);
+        assert!(popup(&app).overrides().is_empty());
+
+        let parts = popup(&app).run_request().to_command_parts("Makefile");
+        assert_eq!(parts, ["make", "-f", "Makefile", "all"]);
+    }
+
+    #[test]
+    fn edited_variable_is_overridden() {
+        let mut app = App::new(
+            vec![var("OUT", "build")],
+            vec![target("all", &["$(CC) -o $(OUT)/app main.c"])],
+            "Makefile".into(),
+            false,
+        );
+        press(&mut app, KeyCode::Enter);
+        // Variables are listed in reference order: CC first, then OUT.
+        press(&mut app, KeyCode::Tab);
+        type_str(&mut app, "2");
+        assert_eq!(
+            popup(&app).overrides(),
+            vec![("OUT".to_string(), "build2".to_string())]
+        );
+
+        press(&mut app, KeyCode::Enter);
+        let req = app.run_target.as_ref().expect("run requested");
+        assert_eq!(
+            req.to_command_parts("Makefile"),
+            ["make", "-f", "Makefile", "OUT=build2", "all"]
+        );
+    }
+
+    #[test]
+    fn search_selection_respects_sort_order() {
+        let mut app = App::new(
+            Vec::new(),
+            vec![
+                target("zeta", &[]),
+                target("alpha", &[]),
+                target("mid", &[]),
+            ],
+            "Makefile".into(),
+            false,
+        );
+        press(&mut app, KeyCode::Char('s')); // a-z: alpha, mid, zeta
+        press(&mut app, KeyCode::Char('/'));
+        type_str(&mut app, "zeta");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc); // close popup, back to normal mode
+
+        let idx = app.selected_target_index().unwrap();
+        assert_eq!(app.targets[idx].name, "zeta");
+    }
+
+    #[test]
+    fn ctrl_chords_are_not_typed_into_inputs() {
+        let mut app = App::new(
+            vec![var("OUT", "build")],
+            vec![target("all", &["echo $(OUT)"])],
+            "Makefile".into(),
+            false,
+        );
+        press(&mut app, KeyCode::Enter);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(popup(&app).variables[0].1, "build");
+
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('/'));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        match &app.mode {
+            Mode::Search(s) => assert!(s.query.is_empty()),
+            _ => panic!("expected search mode"),
+        }
     }
 }

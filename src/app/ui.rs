@@ -145,8 +145,11 @@ impl App {
                     .block(Block::bordered().title(" Search ".fg(Color::Yellow).bold()));
                 frame.render_widget(input, search_input_area);
 
-                let cursor_chars = search.query[..search.cursor_pos].chars().count() as u16;
-                let cursor_x = search_input_area.x + 1 + 1 + cursor_chars;
+                let cursor_chars = to_u16(search.query[..search.cursor_pos].chars().count());
+                let cursor_x = search_input_area
+                    .x
+                    .saturating_add(2)
+                    .saturating_add(cursor_chars);
                 let cursor_y = search_input_area.y + 1;
                 frame.set_cursor_position((cursor_x, cursor_y));
 
@@ -362,7 +365,7 @@ impl App {
         let has_vars = !popup.variables.is_empty();
         let var_lines = if has_vars { popup.variables.len() } else { 1 };
         // +2 for command preview line and dry-run indicator, +5 base
-        let height = (var_lines + 8) as u16;
+        let height = to_u16(var_lines + 8);
         // Compute the name column width (at least 12, grows for longer names)
         let name_col: usize = if has_vars {
             popup
@@ -375,7 +378,7 @@ impl App {
         } else {
             12
         };
-        let width = 60u16.max(name_col as u16 + 30); // ensure enough room
+        let width = 60u16.max(to_u16(name_col + 30)); // ensure enough room
         let area = centered_rect(width, height, frame.area());
         // How many chars of the value can we display
         // Layout: border(1) + arrow(2) + name(name_col) + " = "(3) + value + border(1)
@@ -473,12 +476,10 @@ impl App {
 
         // Command preview
         lines.push(Line::raw(""));
-        let request = super::RunRequest {
-            target_name: popup.target_name.clone(),
-            overrides: popup.variables.clone(),
-            dry_run: popup.dry_run,
-        };
-        let cmd_preview = request.to_command_parts(&self.makefile_path).join(" ");
+        let cmd_preview = popup
+            .run_request()
+            .to_command_parts(&self.makefile_path)
+            .join(" ");
         lines.push(Line::from(vec![
             Span::styled("  $ ", Style::default().fg(Color::DarkGray)),
             Span::styled(cmd_preview, Style::default().fg(Color::White)),
@@ -497,9 +498,16 @@ impl App {
                 0
             };
             let visible_cursor = cursor_char_idx - scroll;
-            let cursor_x = area.x + 1 + 2 + name_col as u16 + 3 + visible_cursor as u16;
-            let cursor_y = area.y + 1 + 2 + popup.selected as u16;
+            let cursor_x = area
+                .x
+                .saturating_add(to_u16(1 + 2 + name_col + 3 + visible_cursor));
+            let cursor_y = area.y.saturating_add(to_u16(1 + 2 + popup.selected));
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
+}
+
+/// Convert a length to a terminal coordinate, clamping instead of wrapping.
+fn to_u16(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
 }

@@ -75,6 +75,7 @@ makr --dry-run
 | `j` / `k`, `↑` / `↓` | Navigate targets |
 | `Ctrl+d` / `Ctrl+u`   | Scroll detail panel |
 | `/`              | Open fuzzy search     |
+| `s`              | Cycle sort order (default / a-z / z-a) |
 | `Enter`          | Run selected target   |
 | `q`, `Esc`       | Quit                  |
 
@@ -91,6 +92,7 @@ makr --dry-run
 | Key              | Action                    |
 |------------------|---------------------------|
 | `Tab` / `↑` / `↓` | Switch between variables |
+| `←` / `→`, typing | Edit the selected value (only edited variables are passed to `make`) |
 | `Ctrl+n`         | Toggle dry-run mode       |
 | `Enter`          | Execute target            |
 | `Esc`            | Cancel                    |

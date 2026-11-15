@@ -2,7 +2,7 @@
 name = "makr"
 version = "0.1.6"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A fast, interactive TUI for exploring and running Makefile targets"
 authors = ["Theo Souchon"]
 license = "MIT"

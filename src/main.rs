@@ -25,6 +25,7 @@ fn print_help() {
     println!("  j/k, Up/Down    Navigate targets");
     println!("  Ctrl+d/Ctrl+u   Scroll detail panel");
     println!("  /               Fuzzy search");
+    println!("  s               Cycle sort order");
     println!("  Enter           Run target (with variable editor)");
     println!("  Ctrl+n (popup)  Toggle dry-run mode");
     println!("  q, Esc          Quit");

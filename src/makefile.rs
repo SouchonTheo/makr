@@ -421,6 +421,7 @@ fn extract_var_references(text: &str) -> Vec<String> {
                 // but still keep scanning past `$(` so nested `$(VAR)` references inside
                 // are picked up.
                 if !name.is_empty()
+                    && !is_automatic_var_form(name)
                     && !name.contains(' ')
                     && !name.contains('\t')
                     && !name.contains('$')
@@ -466,6 +467,12 @@ const AUTOMATIC_MAKE_VARS: &[&str] = &[
     ".LIBPATTERNS",
     ".EXTRA_PREREQS",
 ];
+
+/// Automatic variables written in parenthesised form, e.g. `$(@D)`, `$(<F)`,
+/// `$(^)`. Make sets these per rule; they can't be overridden meaningfully.
+fn is_automatic_var_form(name: &str) -> bool {
+    name.starts_with(['@', '<', '^', '+', '?', '*', '%', '|'])
+}
 
 fn is_automatic_make_var(name: &str) -> bool {
     AUTOMATIC_MAKE_VARS.contains(&name)
@@ -516,6 +523,12 @@ mod tests {
 
     fn test_makefiles_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_makefiles")
+    }
+
+    #[test]
+    fn automatic_variable_forms_are_not_references() {
+        let refs = extract_var_references("mkdir -p $(@D) && cp $(<F) $(OUT)/$(@F) $(^)");
+        assert_eq!(refs, vec!["OUT".to_string()]);
     }
 
     // ── find_target_colon ────────────────────────────────────────
@@ -928,7 +941,11 @@ mod tests {
 
         let all = find_all_used_variables(&target, &vars);
         let names: Vec<&str> = all.iter().map(|v| v.name.as_str()).collect();
-        assert!(!names.contains(&"MAKE"), "MAKE should be filtered: {:?}", names);
+        assert!(
+            !names.contains(&"MAKE"),
+            "MAKE should be filtered: {:?}",
+            names
+        );
         assert!(
             !names.contains(&"MAKEFLAGS"),
             "MAKEFLAGS should be filtered: {:?}",

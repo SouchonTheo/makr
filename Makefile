@@ -1,4 +1,4 @@
-.PHONY: build release fmt clippy lint test clean check
+.PHONY: build release fmt fmt-check clippy lint test clean check
 
 build:
 	cargo build
@@ -10,14 +10,17 @@ fmt:
 	cargo fmt --all
 
 clippy:
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets -- -D warnings
+
+fmt-check:
+	cargo fmt --all -- --check
 
 lint: fmt clippy
 
+check: fmt-check clippy test
+
 test:
 	cargo test
-
-check: lint test
 
 clean:
 	cargo clean

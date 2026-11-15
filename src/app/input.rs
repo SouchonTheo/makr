@@ -7,7 +7,7 @@ impl App {
         match &self.mode {
             Mode::Normal => self.handle_normal_key(key),
             Mode::Popup(_) => self.handle_popup_key(key),
-            Mode::Search(_) => self.handle_search_key(key.code),
+            Mode::Search(_) => self.handle_search_key(key),
         }
     }
 
@@ -36,14 +36,14 @@ impl App {
         }
     }
 
-    fn handle_search_key(&mut self, code: KeyCode) {
-        match code {
+    fn handle_search_key(&mut self, key: KeyEvent) {
+        match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => {
                 if let Some(target_idx) = self.selected_target_index() {
-                    self.list_state.select(Some(target_idx));
+                    self.select_target(target_idx);
                     self.detail_scroll = 0;
                     self.open_popup_for(target_idx);
                 }
@@ -75,7 +75,7 @@ impl App {
                     self.detail_scroll = 0;
                 }
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if is_text_input(key) => {
                 let Some(search) = self.search_state_mut() else {
                     return;
                 };
@@ -127,14 +127,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Mode::Popup(popup) = &self.mode {
-                    let target_name = popup.target_name.clone();
-                    let overrides = popup.variables.clone();
-                    let dry_run = popup.dry_run;
-                    self.run_target = Some(super::RunRequest {
-                        target_name,
-                        overrides,
-                        dry_run,
-                    });
+                    self.run_target = Some(popup.run_request());
                 }
                 self.mode = Mode::Normal;
                 self.needs_clear = true;
@@ -164,7 +157,7 @@ impl App {
                 };
                 popup.cursor_pos = popup.variables[popup.selected].1.len();
             }
-            KeyCode::Char(c) if !popup.variables.is_empty() => {
+            KeyCode::Char(c) if !popup.variables.is_empty() && is_text_input(key) => {
                 let value = &mut popup.variables[popup.selected].1;
                 value.insert(popup.cursor_pos, c);
                 popup.cursor_pos += c.len_utf8();
@@ -191,4 +184,11 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Whether a key press should be inserted as text. Ctrl/Alt chords are
+/// shortcuts (or unbound), never literal characters.
+fn is_text_input(key: KeyEvent) -> bool {
+    !key.modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }

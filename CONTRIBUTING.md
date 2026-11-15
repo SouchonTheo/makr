@@ -14,9 +14,7 @@ Thanks for your interest in contributing! Here's how you can help.
 3. Make sure the checks pass:
 
    ```sh
-   cargo fmt --all -- --check
-   cargo clippy -- -D warnings
-   cargo test
+   make check   # = cargo fmt --check, cargo clippy --all-targets -D warnings, cargo test
    ```
 
 4. Open a pull request against `main`.
@@ -24,7 +22,7 @@ Thanks for your interest in contributing! Here's how you can help.
 ## Code style
 
 - Run `cargo fmt` before committing.
-- Keep warnings clean (`cargo clippy -- -D warnings`).
+- Keep warnings clean (`cargo clippy --all-targets -- -D warnings`).
 - Add tests for new parser features or fuzzy matching logic.
 
 ## License
