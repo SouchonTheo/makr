@@ -26,6 +26,8 @@ pub struct MakeTarget {
     pub dependencies: Vec<String>,
     pub commands: Vec<String>,
     pub is_phony: bool,
+    /// Help text from a `## ...` comment on the rule line or just above it.
+    pub description: Option<String>,
     /// Target-specific variables (`target: VAR = value`), already resolved
     /// against the global value for `+=` / `?=`.
     pub variables: Vec<MakeVariable>,
@@ -38,6 +40,7 @@ struct PendingRule {
     dependencies: Vec<String>,
     commands: Vec<String>,
     double_colon: bool,
+    description: Option<String>,
 }
 
 /// Find the position of the target separator ':' in a line,
@@ -54,6 +57,37 @@ fn find_target_colon(line: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Split a non-recipe line into its code and the text after a comment `#`.
+///
+/// Like make, `\#` is an escaped literal and a `#` inside `$(...)` / `${...}`
+/// is part of the reference, not a comment.
+fn split_comment(line: &str) -> (&str, Option<&str>) {
+    let bytes = line.as_bytes();
+    let mut depth = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' | b'{' if i > 0 && bytes[i - 1] == b'$' => depth += 1,
+            b')' | b'}' if depth > 0 => depth -= 1,
+            b'#' if depth == 0 && (i == 0 || bytes[i - 1] != b'\\') => {
+                return (&line[..i], Some(&line[i + 1..]));
+            }
+            _ => {}
+        }
+    }
+    (line, None)
+}
+
+/// The help text of a `## text` comment, given what follows the first `#`.
+/// Plain `# comments` and `### banners` are not descriptions.
+fn doc_text(comment: &str) -> Option<String> {
+    let text = comment.strip_prefix('#')?;
+    if text.starts_with('#') {
+        return None;
+    }
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// Join continuation lines (lines ending with `\`) into single logical lines.
@@ -189,11 +223,15 @@ impl ParseState {
                     dependencies: rule.dependencies.clone(),
                     commands: rule.commands.clone(),
                     is_phony: false,
+                    description: rule.description.clone(),
                     variables: Vec::new(),
                 });
                 continue;
             };
             let target = &mut self.targets[idx];
+            if target.description.is_none() {
+                target.description.clone_from(&rule.description);
+            }
             for dep in &rule.dependencies {
                 if !target.dependencies.contains(dep) {
                     target.dependencies.push(dep.clone());
@@ -223,13 +261,15 @@ impl ParseState {
 
         let base_dir = path.parent().unwrap_or(Path::new("."));
         let mut current_target: Option<PendingRule> = None;
+        // `## text` lines directly above the next rule.
+        let mut pending_doc: Option<String> = None;
 
         let logical_lines = join_continuation_lines(&content);
         let mut line_iter = logical_lines.iter();
 
         while let Some(line) = line_iter.next() {
-            // Skip comments and empty lines
-            if line.starts_with('#') || line.trim().is_empty() {
+            if line.trim().is_empty() {
+                pending_doc = None;
                 continue;
             }
 
@@ -241,7 +281,18 @@ impl ParseState {
                 continue;
             }
 
-            let trimmed = line.trim();
+            let (code, comment) = split_comment(line);
+            let trimmed = code.trim();
+            if trimmed.is_empty() {
+                // Comment-only line: collect `##` help text for the next rule.
+                pending_doc = match (pending_doc.take(), comment.and_then(doc_text)) {
+                    (Some(prev), Some(text)) => Some(format!("{prev} {text}")),
+                    (_, text) => text,
+                };
+                continue;
+            }
+            // Help text applies only to a rule that immediately follows it.
+            let doc_above = pending_doc.take();
 
             // Skip `define ... endef` blocks
             if trimmed.starts_with("define ") || trimmed == "define" {
@@ -410,6 +461,7 @@ impl ParseState {
                         .into_iter()
                         .collect(),
                     double_colon,
+                    description: comment.and_then(doc_text).or(doc_above),
                 });
             }
         }
@@ -645,6 +697,37 @@ mod tests {
 
     fn test_makefiles_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_makefiles")
+    }
+
+    // ── comments and `##` descriptions ───────────────────────────
+
+    #[test]
+    fn descriptions_from_double_hash_comments() {
+        let (_, targets) = parse_makefile(&test_makefiles_dir().join("help.mk")).unwrap();
+        let desc = |name: &str| {
+            targets
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+                .description
+                .clone()
+        };
+        assert_eq!(desc("build").as_deref(), Some("Compile the project"));
+        assert_eq!(desc("test").as_deref(), Some("Run the test suite (slow)"));
+        assert_eq!(desc("clean"), None);
+        assert_eq!(desc("lint").as_deref(), Some("Inline wins"));
+    }
+
+    #[test]
+    fn comments_are_stripped_from_rules_and_values() {
+        let (vars, targets) = parse_makefile(&test_makefiles_dir().join("help.mk")).unwrap();
+        let value = |name: &str| vars.iter().find(|v| v.name == name).unwrap().value.clone();
+        assert_eq!(value("CC"), "gcc");
+        assert_eq!(value("HASH"), "a\\#b");
+        assert_eq!(value("DATE"), "$(shell date +%s#)");
+
+        let build = targets.iter().find(|t| t.name == "build").unwrap();
+        assert_eq!(build.dependencies, ["main.o"]);
     }
 
     // ── repeated rules (issue #1) ────────────────────────────────
@@ -1066,6 +1149,7 @@ mod tests {
             dependencies: vec![],
             commands: vec!["rm -f *.o".into()],
             is_phony: false,
+            description: None,
             variables: Vec::new(),
         };
 
@@ -1085,6 +1169,7 @@ mod tests {
             dependencies: vec![],
             commands: vec!["${CC} -o out main.c".into()],
             is_phony: false,
+            description: None,
             variables: Vec::new(),
         };
 
@@ -1105,6 +1190,7 @@ mod tests {
             dependencies: vec![],
             commands: vec!["$(CC) -o $(NAME) main.c".into()],
             is_phony: false,
+            description: None,
             variables: Vec::new(),
         };
 
@@ -1126,6 +1212,7 @@ mod tests {
             dependencies: vec!["$(NAME)".into()],
             commands: vec!["echo $(NAME)".into()],
             is_phony: false,
+            description: None,
             variables: Vec::new(),
         };
 
@@ -1148,6 +1235,7 @@ mod tests {
                 "echo $(CURDIR)/$(NAME)".into(),
             ],
             is_phony: false,
+            description: None,
             variables: Vec::new(),
         };
 
@@ -1179,6 +1267,7 @@ mod tests {
             dependencies: vec!["$(BUILD_DIR)/app".into()],
             commands: vec![],
             is_phony: false,
+            description: None,
             variables: Vec::new(),
         };
 

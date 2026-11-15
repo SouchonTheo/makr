@@ -56,9 +56,9 @@ pub(crate) struct RunRequest {
 }
 
 impl RunRequest {
-    pub fn to_command_parts(&self, makefile_path: &str) -> Vec<String> {
+    pub fn to_command_parts(&self, make_program: &str, makefile_path: &str) -> Vec<String> {
         let mut parts = vec![
-            "make".to_string(),
+            make_program.to_string(),
             "-f".to_string(),
             makefile_path.to_string(),
         ];
@@ -112,6 +112,7 @@ pub struct App {
     pub(crate) should_quit: bool,
     pub(crate) run_target: Option<RunRequest>,
     pub(crate) makefile_path: String,
+    pub(crate) make_program: String,
     pub(crate) detail_scroll: u16,
     pub(crate) dry_run: bool,
     pub(crate) last_result: Option<String>,
@@ -130,6 +131,7 @@ impl App {
         variables: Vec<MakeVariable>,
         targets: Vec<MakeTarget>,
         makefile_path: String,
+        make_program: String,
         dry_run: bool,
     ) -> Self {
         let mut list_state = ListState::default();
@@ -145,6 +147,7 @@ impl App {
             should_quit: false,
             run_target: None,
             makefile_path,
+            make_program,
             detail_scroll: 0,
             dry_run,
             last_result: None,
@@ -208,11 +211,11 @@ impl App {
     }
 
     fn run_make(&mut self, request: RunRequest, terminal: &mut DefaultTerminal) -> io::Result<()> {
-        let parts = request.to_command_parts(&self.makefile_path);
+        let parts = request.to_command_parts(&self.make_program, &self.makefile_path);
         let target_name = request.target_name.clone();
         let dry_run = request.dry_run;
 
-        // Build Command from parts: parts[0] is "make", rest are args
+        // Build Command from parts: parts[0] is the make program, rest are args
         let mut cmd = Command::new(&parts[0]);
         for arg in &parts[1..] {
             cmd.arg(arg);
@@ -384,6 +387,7 @@ mod tests {
             dependencies: Vec::new(),
             commands: commands.iter().map(|c| (*c).to_string()).collect(),
             is_phony: true,
+            description: None,
             variables: Vec::new(),
         }
     }
@@ -420,13 +424,16 @@ mod tests {
             vec![var("OUT", "build")],
             vec![target("all", &["$(CC) -o $(OUT)/app main.c"])],
             "Makefile".into(),
+            "make".into(),
             false,
         );
         press(&mut app, KeyCode::Enter);
         assert_eq!(popup(&app).variables.len(), 2);
         assert!(popup(&app).overrides().is_empty());
 
-        let parts = popup(&app).run_request().to_command_parts("Makefile");
+        let parts = popup(&app)
+            .run_request()
+            .to_command_parts("make", "Makefile");
         assert_eq!(parts, ["make", "-f", "Makefile", "all"]);
     }
 
@@ -436,6 +443,7 @@ mod tests {
             vec![var("OUT", "build")],
             vec![target("all", &["$(CC) -o $(OUT)/app main.c"])],
             "Makefile".into(),
+            "make".into(),
             false,
         );
         press(&mut app, KeyCode::Enter);
@@ -450,7 +458,7 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         let req = app.run_target.as_ref().expect("run requested");
         assert_eq!(
-            req.to_command_parts("Makefile"),
+            req.to_command_parts("make", "Makefile"),
             ["make", "-f", "Makefile", "OUT=build2", "all"]
         );
     }
@@ -465,6 +473,7 @@ mod tests {
                 target("mid", &[]),
             ],
             "Makefile".into(),
+            "make".into(),
             false,
         );
         press(&mut app, KeyCode::Char('s')); // a-z: alpha, mid, zeta
@@ -483,6 +492,7 @@ mod tests {
             vec![var("OUT", "build")],
             vec![target("all", &["echo $(OUT)"])],
             "Makefile".into(),
+            "make".into(),
             false,
         );
         press(&mut app, KeyCode::Enter);

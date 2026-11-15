@@ -173,6 +173,7 @@ impl App {
                                     .add_modifier(Modifier::ITALIC),
                             ));
                         }
+                        line.spans.extend(description_span(target));
                         line
                     })
                     .collect();
@@ -213,6 +214,7 @@ impl App {
                                     .add_modifier(Modifier::ITALIC),
                             ));
                         }
+                        spans.extend(description_span(t));
                         Line::from(spans)
                     })
                     .collect();
@@ -249,6 +251,12 @@ impl App {
                 ));
             }
             lines.push(Line::from(title_spans));
+            if let Some(desc) = &target.description {
+                lines.push(Line::styled(
+                    desc.as_str(),
+                    Style::default().add_modifier(Modifier::ITALIC),
+                ));
+            }
             lines.push(Line::raw(""));
 
             if !target.dependencies.is_empty() {
@@ -478,7 +486,7 @@ impl App {
         lines.push(Line::raw(""));
         let cmd_preview = popup
             .run_request()
-            .to_command_parts(&self.makefile_path)
+            .to_command_parts(&self.make_program, &self.makefile_path)
             .join(" ");
         lines.push(Line::from(vec![
             Span::styled("  $ ", Style::default().fg(Color::DarkGray)),
@@ -510,4 +518,12 @@ impl App {
 /// Convert a length to a terminal coordinate, clamping instead of wrapping.
 fn to_u16(n: usize) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX)
+}
+
+/// Dimmed `  description` suffix for a target in the list, if it has one.
+fn description_span(target: &crate::makefile::MakeTarget) -> Option<Span<'_>> {
+    target
+        .description
+        .as_deref()
+        .map(|desc| Span::styled(format!("  {desc}"), Style::default().fg(Color::DarkGray)))
 }

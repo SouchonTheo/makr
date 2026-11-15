@@ -12,7 +12,7 @@ A fast, interactive TUI for exploring and running Makefile targets.
 
 ## Features
 
-- **Browse targets** — lists all targets from your Makefile in a navigable panel, with `.PHONY` indicators
+- **Browse targets** — lists all targets from your Makefile in a navigable panel, with `.PHONY` indicators and `## descriptions`
 - **Target details** — shows dependencies, commands, and used variables for each target, with scrollable detail view
 - **Fuzzy search** — quickly find targets with `/`, with matched characters highlighted and results ranked by match quality
 - **Variable editor** — edit Makefile variables before running a target, with a live command preview
@@ -45,11 +45,14 @@ makr [OPTIONS] [FILE]
 
 **Arguments:**
 
-- `[FILE]` — Path to a Makefile (default: `./Makefile`)
+- `[FILE]` — Path to a Makefile (default: `GNUmakefile`, `makefile` or `Makefile`, like make)
 
 **Options:**
 
+- `-f, --file <FILE>` — Path to a Makefile (same as `FILE`, like `make -f`)
+- `-C, --directory <DIR>` — Change to `DIR` before reading the Makefile and running targets
 - `-n, --dry-run` — Start in dry-run mode (pass `-n` to make)
+- `--make <PROGRAM>` — Make program to run, e.g. `gmake` (default: `make`)
 - `-h, --help` — Show help message
 - `-v, --version` — Show version
 
@@ -64,7 +67,26 @@ makr path/to/Makefile
 
 # Start in dry-run mode
 makr --dry-run
+
+# Explore a project in another directory, using GNU make on macOS/BSD
+makr -C ~/src/project --make gmake
 ```
+
+### Target descriptions
+
+Add a `##` comment to a rule (or on the lines just above it) and makr shows it
+next to the target and in the details panel:
+
+```make
+build: main.o ## Compile the project
+	$(CC) -o app main.o
+
+## Run the test suite
+test: build
+	./run-tests
+```
+
+Plain `#` comments and `###` banners are ignored.
 
 ## Keybindings
 
@@ -108,6 +130,7 @@ makr --dry-run
 
 - [ratatui](https://github.com/ratatui/ratatui) — Terminal UI framework
 - [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal manipulation
+- [clap](https://github.com/clap-rs/clap) — Command-line argument parsing
 
 ## Contributing
 
