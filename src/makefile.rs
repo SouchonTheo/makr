@@ -26,6 +26,18 @@ pub struct MakeTarget {
     pub dependencies: Vec<String>,
     pub commands: Vec<String>,
     pub is_phony: bool,
+    /// Target-specific variables (`target: VAR = value`), already resolved
+    /// against the global value for `+=` / `?=`.
+    pub variables: Vec<MakeVariable>,
+}
+
+/// A rule line being accumulated (its recipe lines follow it). One rule can
+/// name several targets (`a b: dep`), and is merged into each of them.
+struct PendingRule {
+    names: Vec<String>,
+    dependencies: Vec<String>,
+    commands: Vec<String>,
+    double_colon: bool,
 }
 
 /// Find the position of the target separator ':' in a line,
@@ -85,7 +97,10 @@ fn detect_assignment(line: &str) -> Option<(usize, AssignmentKind)> {
                 if i + 2 < bytes.len() && bytes[i + 1] == b':' && bytes[i + 2] == b'=' {
                     return Some((i, AssignmentKind::Simple));
                 }
-                // A bare colon means this is a target rule, not an assignment
+                // A bare colon (or `::`) means this is a rule line. Anything
+                // after it — including a target-specific `VAR = value` —
+                // belongs to the rule, not to a global assignment.
+                return None;
             }
             b'?' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'=' => {
                 return Some((i, AssignmentKind::Conditional));
@@ -101,6 +116,20 @@ fn detect_assignment(line: &str) -> Option<(usize, AssignmentKind)> {
         }
     }
     None
+}
+
+/// Split an assignment line at the operator found by `detect_assignment`
+/// into trimmed `(name, value)`.
+fn split_assignment(line: &str, op_pos: usize, kind: &AssignmentKind) -> (String, String) {
+    let op_len = match kind {
+        AssignmentKind::Recursive => 1,
+        AssignmentKind::Simple if line[op_pos..].starts_with("::=") => 3,
+        AssignmentKind::Simple | AssignmentKind::Conditional | AssignmentKind::Append => 2,
+    };
+    (
+        line[..op_pos].trim().to_string(),
+        line[op_pos + op_len..].trim().to_string(),
+    )
 }
 
 /// Strip leading `export` and/or `override` prefixes from a line
@@ -129,6 +158,10 @@ struct ParseState {
     visited: HashSet<PathBuf>,
     phony_names: HashSet<String>,
     defined_vars: HashMap<String, usize>,
+    /// Name → index into `targets`, so repeated rules merge into one entry.
+    target_index: HashMap<String, usize>,
+    /// Target-specific variable lines, in file order, keyed by target name.
+    target_vars: HashMap<String, Vec<MakeVariable>>,
 }
 
 impl ParseState {
@@ -139,6 +172,38 @@ impl ParseState {
             visited: HashSet::new(),
             phony_names: HashSet::new(),
             defined_vars: HashMap::new(),
+            target_index: HashMap::new(),
+            target_vars: HashMap::new(),
+        }
+    }
+
+    /// Merge a finished rule into the target list, following GNU make:
+    /// prerequisites from every rule for a target are combined; for ordinary
+    /// rules the last recipe wins, for double-colon rules recipes accumulate.
+    fn flush_rule(&mut self, rule: PendingRule) {
+        for name in rule.names {
+            let Some(&idx) = self.target_index.get(&name) else {
+                self.target_index.insert(name.clone(), self.targets.len());
+                self.targets.push(MakeTarget {
+                    name,
+                    dependencies: rule.dependencies.clone(),
+                    commands: rule.commands.clone(),
+                    is_phony: false,
+                    variables: Vec::new(),
+                });
+                continue;
+            };
+            let target = &mut self.targets[idx];
+            for dep in &rule.dependencies {
+                if !target.dependencies.contains(dep) {
+                    target.dependencies.push(dep.clone());
+                }
+            }
+            if rule.double_colon {
+                target.commands.extend(rule.commands.iter().cloned());
+            } else if !rule.commands.is_empty() {
+                target.commands.clone_from(&rule.commands);
+            }
         }
     }
 
@@ -157,7 +222,7 @@ impl ParseState {
         };
 
         let base_dir = path.parent().unwrap_or(Path::new("."));
-        let mut current_target: Option<MakeTarget> = None;
+        let mut current_target: Option<PendingRule> = None;
 
         let logical_lines = join_continuation_lines(&content);
         let mut line_iter = logical_lines.iter();
@@ -194,8 +259,8 @@ impl ParseState {
                 .or_else(|| trimmed.strip_prefix("-include "))
                 .or_else(|| trimmed.strip_prefix("sinclude "))
             {
-                if let Some(target) = current_target.take() {
-                    self.targets.push(target);
+                if let Some(rule) = current_target.take() {
+                    self.flush_rule(rule);
                 }
 
                 let is_optional =
@@ -225,24 +290,11 @@ impl ParseState {
 
             // Variable assignment detection
             if let Some((op_pos, kind)) = detect_assignment(stripped) {
-                let name = stripped[..op_pos].trim().to_string();
-                let op_len = match kind {
-                    AssignmentKind::Recursive => 1,
-                    AssignmentKind::Simple => {
-                        if stripped[op_pos..].starts_with("::=") {
-                            3
-                        } else {
-                            2
-                        }
-                    }
-                    AssignmentKind::Conditional => 2,
-                    AssignmentKind::Append => 2,
-                };
-                let value = stripped[op_pos + op_len..].trim().to_string();
+                let (name, value) = split_assignment(stripped, op_pos, &kind);
 
                 if !name.is_empty() && !name.contains(' ') {
-                    if let Some(target) = current_target.take() {
-                        self.targets.push(target);
+                    if let Some(rule) = current_target.take() {
+                        self.flush_rule(rule);
                     }
 
                     match kind {
@@ -303,33 +355,67 @@ impl ParseState {
                 continue;
             }
 
-            // Target line
+            // Rule line: `names: deps`, `names:: deps`, `names: deps ; recipe`
+            // or a target-specific variable `names: VAR = value`.
             if let Some(colon_pos) = find_target_colon(trimmed) {
-                let name = trimmed[..colon_pos].trim();
-                let deps_str = &trimmed[colon_pos + 1..];
+                if let Some(rule) = current_target.take() {
+                    self.flush_rule(rule);
+                }
 
-                if name.is_empty() || name.starts_with('.') || name.contains('%') {
+                // Special targets (.SUFFIXES, .DEFAULT, …) and pattern rules
+                // aren't runnable targets; a recipe following them is dropped.
+                let names: Vec<String> = trimmed[..colon_pos]
+                    .split_whitespace()
+                    .filter(|n| !n.starts_with('.') && !n.contains('%'))
+                    .map(str::to_string)
+                    .collect();
+                if names.is_empty() {
                     continue;
                 }
 
-                if let Some(target) = current_target.take() {
-                    self.targets.push(target);
+                let mut rest = &trimmed[colon_pos + 1..];
+                let double_colon = rest.starts_with(':');
+                if double_colon {
+                    rest = &rest[1..];
                 }
 
-                let dependencies: Vec<String> =
-                    deps_str.split_whitespace().map(|s| s.to_string()).collect();
+                let var_line = strip_var_prefixes(rest.trim());
+                if let Some((op_pos, kind)) = detect_assignment(var_line) {
+                    let (name, value) = split_assignment(var_line, op_pos, &kind);
+                    if !name.is_empty() && !name.contains(char::is_whitespace) {
+                        for target in names {
+                            self.target_vars
+                                .entry(target)
+                                .or_default()
+                                .push(MakeVariable {
+                                    name: name.clone(),
+                                    value: value.clone(),
+                                    assignment: kind.clone(),
+                                });
+                        }
+                        continue;
+                    }
+                }
 
-                current_target = Some(MakeTarget {
-                    name: name.to_string(),
-                    dependencies,
-                    commands: Vec::new(),
-                    is_phony: false,
+                let (deps_str, inline_recipe) = match rest.split_once(';') {
+                    Some((deps, recipe)) => (deps, Some(recipe.trim())),
+                    None => (rest, None),
+                };
+                current_target = Some(PendingRule {
+                    names,
+                    dependencies: deps_str.split_whitespace().map(str::to_string).collect(),
+                    commands: inline_recipe
+                        .filter(|r| !r.is_empty())
+                        .map(str::to_string)
+                        .into_iter()
+                        .collect(),
+                    double_colon,
                 });
             }
         }
 
-        if let Some(target) = current_target {
-            self.targets.push(target);
+        if let Some(rule) = current_target {
+            self.flush_rule(rule);
         }
 
         Ok(())
@@ -342,14 +428,44 @@ pub fn parse_makefile(path: &Path) -> Result<(Vec<MakeVariable>, Vec<MakeTarget>
 
     state.parse_file(path)?;
 
-    // Apply .PHONY markings to targets
     for target in &mut state.targets {
         if state.phony_names.contains(&target.name) {
             target.is_phony = true;
         }
+        if let Some(lines) = state.target_vars.remove(&target.name) {
+            target.variables = resolve_target_vars(lines, &state.variables);
+        }
     }
 
     Ok((state.variables, state.targets))
+}
+
+/// Fold a target's `VAR op value` lines into final values, using the global
+/// variables as the base for `+=` and `?=`.
+fn resolve_target_vars(lines: Vec<MakeVariable>, globals: &[MakeVariable]) -> Vec<MakeVariable> {
+    let mut resolved: Vec<MakeVariable> = Vec::new();
+    for line in lines {
+        let existing = resolved.iter().position(|v| v.name == line.name);
+        let global = globals.iter().find(|v| v.name == line.name);
+        match (line.assignment.clone(), existing) {
+            (AssignmentKind::Conditional, Some(_)) => {}
+            (AssignmentKind::Conditional, None) if global.is_some() => {}
+            (AssignmentKind::Append, Some(i)) => {
+                resolved[i].value.push(' ');
+                resolved[i].value.push_str(&line.value);
+            }
+            (AssignmentKind::Append, None) => {
+                let value = match global {
+                    Some(g) if !g.value.is_empty() => format!("{} {}", g.value, line.value),
+                    _ => line.value,
+                };
+                resolved.push(MakeVariable { value, ..line });
+            }
+            (_, Some(i)) => resolved[i] = line,
+            (_, None) => resolved.push(line),
+        }
+    }
+    resolved
 }
 
 /// Simple glob expansion for include paths (supports `*` in filename).
@@ -496,7 +612,13 @@ pub fn find_all_used_variables(
                 if is_automatic_make_var(&name) {
                     continue;
                 }
-                if let Some(var) = variables.iter().find(|v| v.name == name) {
+                // Target-specific values shadow globals, as in make.
+                let defined = target
+                    .variables
+                    .iter()
+                    .chain(variables)
+                    .find(|v| v.name == name);
+                if let Some(var) = defined {
                     result.push(MakeVariable {
                         name: var.name.clone(),
                         value: var.value.clone(),
@@ -523,6 +645,91 @@ mod tests {
 
     fn test_makefiles_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_makefiles")
+    }
+
+    // ── repeated rules (issue #1) ────────────────────────────────
+
+    fn parse_multi_rule() -> (Vec<MakeVariable>, Vec<MakeTarget>) {
+        parse_makefile(&test_makefiles_dir().join("multi_rule.mk")).unwrap()
+    }
+
+    fn find<'a>(targets: &'a [MakeTarget], name: &str) -> &'a MakeTarget {
+        targets.iter().find(|t| t.name == name).unwrap()
+    }
+
+    #[test]
+    fn repeated_rules_merge_into_one_target() {
+        let (_, targets) = parse_multi_rule();
+        let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "install_chrome_browser",
+                "a",
+                "b",
+                "c",
+                "inline",
+                "log",
+                "redo"
+            ]
+        );
+
+        let chrome = find(&targets, "install_chrome_browser");
+        assert!(chrome.is_phony);
+        assert_eq!(chrome.dependencies, ["deps_a", "deps_b"]);
+        assert_eq!(chrome.commands.len(), 1);
+    }
+
+    #[test]
+    fn target_specific_variables_are_not_dependencies() {
+        let (globals, targets) = parse_multi_rule();
+        let chrome = find(&targets, "install_chrome_browser");
+        let vars: Vec<(&str, &str)> = chrome
+            .variables
+            .iter()
+            .map(|v| (v.name.as_str(), v.value.as_str()))
+            .collect();
+        assert_eq!(vars, [("CHROME_VERSION", "120"), ("FLAGS", "-q -v")]);
+
+        // Globals are untouched, and the popup shows the target-specific value.
+        let global = globals.iter().find(|v| v.name == "CHROME_VERSION").unwrap();
+        assert_eq!(global.value, "110");
+        let used = find_all_used_variables(chrome, &globals);
+        assert_eq!(used[0].name, "CHROME_VERSION");
+        assert_eq!(used[0].value, "120");
+    }
+
+    #[test]
+    fn multiple_targets_on_one_line() {
+        let (_, targets) = parse_multi_rule();
+        for name in ["a", "b", "c"] {
+            let t = find(&targets, name);
+            assert_eq!(t.dependencies, ["shared"]);
+            assert_eq!(t.commands, ["@echo $@"]);
+        }
+    }
+
+    #[test]
+    fn inline_recipe_after_semicolon() {
+        let (_, targets) = parse_multi_rule();
+        let t = find(&targets, "inline");
+        assert_eq!(t.dependencies, ["dep"]);
+        assert_eq!(t.commands, ["@echo inline"]);
+    }
+
+    #[test]
+    fn double_colon_recipes_accumulate_and_last_recipe_wins() {
+        let (_, targets) = parse_multi_rule();
+        assert_eq!(find(&targets, "log").commands, ["@echo one", "@echo two"]);
+        assert_eq!(find(&targets, "redo").commands, ["@echo new"]);
+    }
+
+    #[test]
+    fn rule_line_is_not_an_assignment() {
+        assert!(detect_assignment("t: VAR = x").is_none());
+        assert!(detect_assignment("t:: dep").is_none());
+        assert!(detect_assignment("VAR ::= x").is_some());
+        assert!(detect_assignment("URL = http://x").is_some());
     }
 
     #[test]
@@ -859,6 +1066,7 @@ mod tests {
             dependencies: vec![],
             commands: vec!["rm -f *.o".into()],
             is_phony: false,
+            variables: Vec::new(),
         };
 
         let all = find_all_used_variables(&target, &vars);
@@ -877,6 +1085,7 @@ mod tests {
             dependencies: vec![],
             commands: vec!["${CC} -o out main.c".into()],
             is_phony: false,
+            variables: Vec::new(),
         };
 
         let all = find_all_used_variables(&target, &vars);
@@ -896,6 +1105,7 @@ mod tests {
             dependencies: vec![],
             commands: vec!["$(CC) -o $(NAME) main.c".into()],
             is_phony: false,
+            variables: Vec::new(),
         };
 
         let all = find_all_used_variables(&target, &vars);
@@ -916,6 +1126,7 @@ mod tests {
             dependencies: vec!["$(NAME)".into()],
             commands: vec!["echo $(NAME)".into()],
             is_phony: false,
+            variables: Vec::new(),
         };
 
         let all = find_all_used_variables(&target, &vars);
@@ -937,6 +1148,7 @@ mod tests {
                 "echo $(CURDIR)/$(NAME)".into(),
             ],
             is_phony: false,
+            variables: Vec::new(),
         };
 
         let all = find_all_used_variables(&target, &vars);
@@ -967,6 +1179,7 @@ mod tests {
             dependencies: vec!["$(BUILD_DIR)/app".into()],
             commands: vec![],
             is_phony: false,
+            variables: Vec::new(),
         };
 
         let all = find_all_used_variables(&target, &vars);

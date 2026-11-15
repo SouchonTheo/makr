@@ -384,6 +384,7 @@ mod tests {
             dependencies: Vec::new(),
             commands: commands.iter().map(|c| (*c).to_string()).collect(),
             is_phony: true,
+            variables: Vec::new(),
         }
     }
 
