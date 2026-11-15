@@ -10,6 +10,17 @@ repository = "https://github.com/SouchonTheo/makr"
 readme = "README.md"
 keywords = ["make", "makefile", "tui", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
+# Keep the published crate small: no demo GIF, CI config or templates.
+include = ["/src", "/test_makefiles", "/README.md", "/LICENSE", "/Cargo.lock"]
+
+# Lets `cargo binstall makr` download the prebuilt release archives.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
 
 [profile.release]
 lto = true

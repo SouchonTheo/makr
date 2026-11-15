@@ -29,6 +29,14 @@ From [crates.io](https://crates.io/crates/makr):
 cargo install makr
 ```
 
+Prebuilt binary (Linux, macOS, Windows) via [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
+
+```sh
+cargo binstall makr
+```
+
+Or download an archive from the [releases page](https://github.com/SouchonTheo/makr/releases).
+
 From source:
 
 ```sh
